@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Root Voice Changer</string>
+    <string name="status_title">Состояние</string>
+    <string name="install">Установить модуль</string>
+    <string name="reinstall">Переустановить</string>
+    <string name="remove">Удалить</string>
+    <string name="reboot">Перезагрузить</string>
+    <string name="voice_title">Голос</string>
+    <string name="enabled">Изменять голос</string>
+    <string name="presets">Пресеты</string>
+    <string name="roughness">Грубость</string>
+    <string name="softer">мягче, выше</string>
+    <string name="rougher">грубее, ниже</string>
+    <string name="advanced">Тонкая настройка</string>
+    <string name="pitch">Высота тона</string>
+    <string name="robot">Робот</string>
+    <string name="echo">Эхо</string>
+    <string name="radio">Рация</string>
+    <string name="gain">Громкость</string>
+    <string name="test_title">Проверка</string>
+    <string name="listen">Слушать себя</string>
+    <string name="stop_listen">Остановить</string>
+    <string name="headphones">Наденьте наушники, иначе будет свист обратной связи.</string>
+    <string name="about">Модуль добавляет в систему аудиоэффект для микрофона: голос меняется в звонках мессенджеров, Discord, диктофоне и других приложениях. Параметры применяются на лету, перезагрузка нужна только после установки модуля. Нужен Magisk, KernelSU или APatch.</string>
+</resources>

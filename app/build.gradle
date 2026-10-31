@@ -1,0 +1,74 @@
+apply plugin: 'com.android.application'
+
+// Версия приложения (0.x.y). versionCode выводится из неё.
+def appVersion = "0.1.0"
+def (vMajor, vMinor, vPatch) = appVersion.tokenize('.').collect { it as int }
+
+// Ключ подписи лежит в keystore/ (вне git).
+def keystoreProps = rootProject.file('keystore/keystore.properties')
+
+android {
+    namespace 'ru.relkin.rootvoice'
+    compileSdk 35
+    ndkVersion '27.2.12479018'
+
+    defaultConfig {
+        applicationId "ru.relkin.rootvoice"
+        // Android 8+: audio_effects.xml и effect HAL, которые использует модуль.
+        minSdk 26
+        targetSdk 35
+        versionCode 100 + vMajor * 10000 + vMinor * 100 + vPatch
+        versionName appVersion
+        resourceConfigurations += ['ru']
+        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' }
+        externalNativeBuild { cmake { arguments '-DANDROID_STL=none' } }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    signingConfigs {
+        if (keystoreProps.exists()) {
+            def props = new Properties()
+            keystoreProps.withInputStream { props.load(it) }
+            release {
+                storeFile rootProject.file("keystore/${props.storeFile}")
+                storePassword props.storePassword
+                keyAlias props.keyAlias
+                keyPassword props.keyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (keystoreProps.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    testOptions { unitTests.returnDefaultValues = true }
+
+    packaging {
+        jniLibs { excludes += ['lib/x86/**', 'lib/x86_64/**'] }
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    testImplementation 'junit:junit:4.13.2'
+}

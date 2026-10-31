@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Root Voice Changer</title>
+  <meta name="description" content="Изменение голоса в реальном времени для всех приложений Android с root: пресеты и ползунок грубости.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%234A3A8C'/%3E%3Cpath fill='white' transform='translate(3 3) scale(.75)' d='M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --bg: #f8f9ff; --surface: #ffffff; --surface2: #eceef4; --text: #191c20; --muted: #43474e;
+      --primary: #4a3a8c; --on-primary: #ffffff; --primary-c: #e6deff; --on-primary-c: #1d0b5c; --line: #dfe2eb;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #111418; --surface: #191c20; --surface2: #272a2f; --text: #e1e2e8; --muted: #c3c7cf;
+        --primary: #cbbeff; --on-primary: #32218a; --primary-c: #4a3a8c; --on-primary-c: #e6deff; --line: #43474e;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #111418; --surface: #191c20; --surface2: #272a2f; --text: #e1e2e8; --muted: #c3c7cf;
+      --primary: #cbbeff; --on-primary: #32218a; --primary-c: #4a3a8c; --on-primary-c: #e6deff; --line: #43474e;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .wrap { max-width: 880px; margin: 0 auto; padding: 0 16px; }
+    header { padding: 20px 0; display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 20px; }
+    .logo { width: 40px; height: 40px; border-radius: 12px; background: var(--primary); display: grid; place-items: center; }
+    .logo svg { width: 24px; height: 24px; fill: var(--on-primary); }
+    h1 { font-size: clamp(28px, 6vw, 44px); line-height: 1.15; margin: 24px 0 12px; }
+    .lead { color: var(--muted); font-size: 18px; max-width: 640px; }
+    .card { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 20px; margin: 16px 0; }
+    .release { background: var(--primary-c); color: var(--on-primary-c); border: 0; }
+    .btn { display: inline-block; padding: 12px 22px; border-radius: 999px; background: var(--primary); color: var(--on-primary); text-decoration: none; font-weight: 600; }
+    .btn.ghost { background: transparent; color: inherit; border: 1px solid currentColor; }
+    .meta { font-size: 14px; opacity: .85; margin-top: 8px; }
+    code { font: 12px/1.4 ui-monospace, monospace; word-break: break-all; display: block; background: var(--surface2); color: var(--text); padding: 8px 10px; border-radius: 10px; margin-top: 8px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+    .grid .card { margin: 0; }
+    h2 { margin-top: 40px; }
+    h3 { margin: 0 0 6px; font-size: 17px; }
+    .grid p { margin: 0; color: var(--muted); }
+    footer { color: var(--muted); font-size: 14px; padding: 40px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo"><svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg></div>
+      Root Voice Changer
+    </header>
+
+    <h1>Другой голос — во всех приложениях</h1>
+    <p class="lead">Меняет голос с микрофона в реальном времени прямо в системе: звонки в мессенджерах, Discord,
+      диктофон, видео. Готовые пресеты и один ползунок «грубости». Нужен root (Magisk, KernelSU или APatch).</p>
+
+    <div class="card release" id="current">
+      <div>Загружаю информацию о версии…</div>
+    </div>
+    <div class="card" id="previous" hidden></div>
+
+    <h2>Возможности</h2>
+    <div class="grid">
+      <div class="card"><h3>Системно, с root</h3><p>Приложение собирает модуль Magisk/KernelSU/APatch с аудиоэффектом для микрофона — голос меняется для любых приложений, а не только внутри одного.</p></div>
+      <div class="card"><h3>Ползунок грубости</h3><p>Влево — мягче и выше, вправо — грубее, ниже, с хрипотцой. Изменения применяются на лету, без перезагрузки.</p></div>
+      <div class="card"><h3>Пресеты</h3><p>Грубый, басистый, монстр, женский, ребёнок, бурундук, робот, пришелец, рация, пещера — плюс тонкая настройка тона, эха и громкости.</p></div>
+      <div class="card"><h3>Проверка в наушниках</h3><p>Кнопка «Слушать себя» показывает, как вас слышат другие. Работает и до установки модуля.</p></div>
+    </div>
+
+    <h2>Как установить</h2>
+    <div class="card"><p style="margin:0">1. Скачайте и установите APK, сверив SHA-256.<br>2. Откройте приложение и выдайте root-доступ.<br>
+      3. Нажмите «Установить модуль» и перезагрузите телефон.<br>4. Выберите пресет или двигайте ползунок — голос меняется сразу.</p></div>
+
+    <footer>Android 8.0+, arm64 / armv7, root. Работает на прошивках с классическим effect HAL (audio_effects.xml); на части устройств с AIDL-HAL эффектов (Android 14+) модуль может не подхватиться. APK подписан, сверяйте SHA-256. Исходники: <a href="https://github.com/relkin016/root_voice_changer" style="color:inherit">GitHub</a>.</footer>
+  </div>
+  <script>
+    const fmtSize = b => (b / 1048576).toFixed(1).replace('.', ',') + ' МБ';
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    function block(r, title, primary) {
+      return `<div style="font-size:14px;opacity:.85">${title}</div>
+        <div style="font-size:28px;font-weight:700;margin:4px 0 12px">Версия ${esc(r.version)}</div>
+        <a class="btn${primary ? '' : ' ghost'}" href="${esc(r.url)}" rel="noopener">Скачать APK</a>
+        <div class="meta">${esc(r.file)} · ${fmtSize(r.size)} · ${esc(r.date)} · Android ${esc(r.minAndroid)}+</div>
+        <code>SHA-256: ${esc(r.sha256)}</code>`;
+    }
+    fetch('release.json', {cache: 'no-store'}).then(r => r.json()).then(r => {
+      document.getElementById('current').innerHTML = block(r, 'Текущая версия', true);
+      if (r.previous) {
+        const p = document.getElementById('previous');
+        p.innerHTML = block(r.previous, 'Предыдущая версия — для отката', false);
+        p.hidden = false;
+      }
+    }).catch(() => {
+      document.getElementById('current').textContent = 'Не удалось загрузить release.json';
+    });
+  </script>
+</body>
+</html>
