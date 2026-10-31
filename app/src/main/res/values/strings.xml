@@ -18,9 +18,12 @@
     <string name="echo">Эхо</string>
     <string name="radio">Рация</string>
     <string name="gain">Громкость</string>
-    <string name="test_title">Проверка</string>
+    <string name="test_title">Прослушка и запись</string>
     <string name="listen">Слушать себя</string>
-    <string name="stop_listen">Остановить</string>
+    <string name="stop_listen">Не слушать</string>
+    <string name="record">Записать</string>
+    <string name="recordings">Записи</string>
+    <string name="no_recordings">Записей пока нет. Нажмите «Записать» — голос сохранится с эффектом.</string>
     <string name="headphones">Наденьте наушники, иначе будет свист обратной связи.</string>
     <string name="about">Модуль добавляет в систему аудиоэффект для микрофона: голос меняется в звонках мессенджеров, Discord, диктофоне и других приложениях. Параметры применяются на лету, перезагрузка нужна только после установки модуля. Нужен Magisk, KernelSU или APatch.</string>
 </resources>

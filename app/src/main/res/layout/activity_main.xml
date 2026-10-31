@@ -194,7 +194,7 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- Проверка -->
+        <!-- Прослушка и запись -->
         <com.google.android.material.card.MaterialCardView style="@style/Card">
             <LinearLayout
                 android:layout_width="match_parent"
@@ -210,13 +210,54 @@
                     android:text="@string/headphones"
                     android:textAppearance="?attr/textAppearanceBodyMedium" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnListen"
-                    style="@style/Widget.Material3.Button.TonalButton"
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:text="@string/listen" />
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnListen"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="8dp"
+                        android:layout_weight="1"
+                        android:text="@string/listen"
+                        app:icon="@drawable/ic_headphones" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnRecord"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/record"
+                        app:icon="@drawable/ic_mic" />
+                </LinearLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Записи -->
+        <com.google.android.material.card.MaterialCardView style="@style/Card">
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView style="@style/CardTitle" android:text="@string/recordings" />
+
+                <TextView
+                    android:id="@+id/recordingsEmpty"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/no_recordings"
+                    android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+                <LinearLayout
+                    android:id="@+id/recordings"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

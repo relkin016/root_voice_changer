@@ -8,6 +8,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
@@ -23,19 +24,22 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.slider.Slider;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
-    private static final int REQ_MIC = 1;
+    private static final int REQ_LISTEN = 1;
+    private static final int REQ_RECORD = 2;
     private static final long PUSH_DELAY_MS = 120;
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final VoiceParams params = new VoiceParams();
-    private final Preview preview = new Preview();
+    private final VoiceEngine engine = new VoiceEngine();
+    private final Runnable recordTick = this::updateRecordUi;
     private final Runnable push = this::pushParams;
 
     private SharedPreferences prefs;
@@ -47,7 +51,8 @@ public class MainActivity extends AppCompatActivity {
 
     private TextView status, lblRough, lblPitch, lblRobot, lblEcho, lblGain, previewInfo;
     private View progress, advanced;
-    private MaterialButton btnInstall, btnRemove, btnReboot, btnListen;
+    private MaterialButton btnInstall, btnRemove, btnReboot, btnListen, btnRecord;
+    private RecordingsPanel recordings;
     private MaterialSwitch swEnabled, swRadio;
     private ChipGroup presets;
     private Slider sRough, sPitch, sRobot, sEcho, sGain;
@@ -77,6 +82,8 @@ public class MainActivity extends AppCompatActivity {
         btnRemove = findViewById(R.id.btnRemove);
         btnReboot = findViewById(R.id.btnReboot);
         btnListen = findViewById(R.id.btnListen);
+        btnRecord = findViewById(R.id.btnRecord);
+        recordings = new RecordingsPanel(this, findViewById(R.id.recordings), findViewById(R.id.recordingsEmpty));
         swEnabled = findViewById(R.id.swEnabled);
         swRadio = findViewById(R.id.swRadio);
         presets = findViewById(R.id.presets);
@@ -144,6 +151,8 @@ public class MainActivity extends AppCompatActivity {
                 .show());
         btnReboot.setOnClickListener(v -> confirmReboot("Перезагрузить телефон?"));
         btnListen.setOnClickListener(v -> toggleListen());
+        btnRecord.setOnClickListener(v -> toggleRecord());
+        recordings.refresh();
 
         showParams();
         updateStatusUi();
@@ -160,7 +169,11 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onStop() {
         super.onStop();
-        stopListen();
+        // Без фонового сервиса микрофон в фоне не держим: запись сохраняется при сворачивании.
+        if (engine.isRecording()) Toast.makeText(this, "Запись сохранена", Toast.LENGTH_SHORT).show();
+        stopEngine();
+        recordings.stopPlayback();
+        recordings.refresh();
     }
 
     @Override
@@ -221,7 +234,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void onParamsChanged() {
         params.save(prefs);
-        preview.setParams(params.serialize());
+        engine.setParams(params.serialize());
         main.removeCallbacks(push);
         main.postDelayed(push, PUSH_DELAY_MS);
     }
@@ -360,44 +373,96 @@ public class MainActivity extends AppCompatActivity {
         btnReboot.setEnabled(rootOk && !busy);
     }
 
-    // ---- прослушка -----------------------------------------------------------------------
+    // ---- прослушка и запись -------------------------------------------------------------
 
-    private void toggleListen() {
-        if (preview.isRunning()) {
-            stopListen();
-            return;
-        }
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC);
-            return;
-        }
-        startListen();
+    private boolean hasMic(int requestCode) {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) return true;
+        requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, requestCode);
+        return false;
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
-        if (requestCode == REQ_MIC && results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
-            startListen();
-        }
+        if (results.length == 0 || results[0] != PackageManager.PERMISSION_GRANTED) return;
+        if (requestCode == REQ_LISTEN) toggleListen();
+        else if (requestCode == REQ_RECORD) toggleRecord();
     }
 
-    private void startListen() {
+    private void toggleListen() {
+        if (engine.isMonitoring()) {
+            engine.setMonitor(false);
+            stopEngineIfIdle();
+        } else {
+            if (!hasMic(REQ_LISTEN)) return;
+            engine.setMonitor(true);
+            ensureEngine();
+        }
+        updateRecordUi();
+    }
+
+    private void toggleRecord() {
+        if (engine.isRecording()) {
+            File f = engine.stopRecording();
+            stopEngineIfIdle();
+            if (f != null) Toast.makeText(this, "Сохранено: " + f.getName(), Toast.LENGTH_SHORT).show();
+            recordings.refresh();
+        } else {
+            if (!hasMic(REQ_RECORD)) return;
+            recordings.stopPlayback();
+            try {
+                engine.startRecording(recordings.newFile());
+            } catch (IOException e) {
+                new MaterialAlertDialogBuilder(this).setTitle("Не удалось начать запись")
+                        .setMessage(String.valueOf(e.getMessage())).setPositiveButton(android.R.string.ok, null).show();
+                return;
+            }
+            ensureEngine();
+            recordings.refresh();
+        }
+        updateRecordUi();
+    }
+
+    /** Запускает поток микрофона, если он ещё не идёт. */
+    private void ensureEngine() {
+        if (engine.isRunning()) return;
         effectLoaded = ModuleInstaller.effectLoaded();
         boolean inApp = !effectLoaded;
         previewInfo.setText(inApp
                 ? "Модуль не активен: звук обрабатывается внутри приложения. Другие приложения пока слышат обычный голос."
                 : "Звук обрабатывает системный модуль — так же вас слышат другие приложения.");
-        btnListen.setText(R.string.stop_listen);
-        preview.start(inApp, params.serialize(), error -> main.post(() -> {
-            btnListen.setText(R.string.listen);
-            if (error != null && !isDestroyed()) previewInfo.setText("Ошибка: " + error);
+        engine.start(inApp, params.serialize(), error -> main.post(() -> {
+            if (isDestroyed()) return;
+            engine.setMonitor(false);
+            engine.stopRecording();
+            recordings.refresh();
+            updateRecordUi();
+            if (error != null) previewInfo.setText("Ошибка: " + error);
         }));
     }
 
-    private void stopListen() {
-        preview.stop();
-        btnListen.setText(R.string.listen);
+    private void stopEngineIfIdle() {
+        if (!engine.isMonitoring() && !engine.isRecording()) stopEngine();
+    }
+
+    private void stopEngine() {
+        engine.setMonitor(false);
+        engine.stopRecording();
+        engine.stop();
         previewInfo.setText(R.string.headphones);
+        updateRecordUi();
+    }
+
+    private void updateRecordUi() {
+        main.removeCallbacks(recordTick);
+        btnListen.setText(engine.isMonitoring() ? R.string.stop_listen : R.string.listen);
+        if (engine.isRecording()) {
+            btnRecord.setText("Стоп " + RecordingsPanel.formatDuration(engine.recordedMs()));
+            btnRecord.setIconResource(R.drawable.ic_stop);
+            main.postDelayed(recordTick, 500);
+        } else {
+            btnRecord.setText(R.string.record);
+            btnRecord.setIconResource(R.drawable.ic_mic);
+        }
     }
 }
