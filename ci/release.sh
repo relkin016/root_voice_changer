@@ -9,7 +9,8 @@ cd "$(dirname "$0")/.."
 notes="${1:-}"
 PY="${MEGA_PY:-$HOME/.venvs/wallet-mega/bin/python}"
 SITE_URL="https://relkin016.github.io/root_voice_changer/"
-secrets="$(ls claude.md CLAUDE.md 2>/dev/null | head -1)"
+secrets=claude.md
+[ -f "$secrets" ] || secrets=CLAUDE.md
 
 ci/remote_build.sh
 version="$(bash ci/version.sh)"
