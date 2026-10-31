@@ -1,9 +1,18 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "date": "2026-10-31",
-  "file": "RootVoiceChanger-0.1.0.apk",
-  "size": 1503096,
-  "sha256": "3e3c99c35967401addcd62b6dba30233d8577e3b528ee4cc482477dfa15589bf",
-  "url": "https://mega.nz/file/5rwy3aSJ#vwjqDVzU12qO5ZBOkQ8psXv9_NQsWAebzribJfu-pc4",
-  "minAndroid": "8.0"
+  "file": "RootVoiceChanger-0.2.0.apk",
+  "size": 1508856,
+  "sha256": "34a654d5fc6b2602389453bf76314661be26dbe6fbbcc2f8ffa779e8f386e3ef",
+  "url": "https://mega.nz/file/smBHkZ5Y#MlM2vTjrDYx4mxqCkw8xOITfUHJ-IPLW-BnNVypQuiI",
+  "minAndroid": "8.0",
+  "previous": {
+    "version": "0.1.0",
+    "date": "2026-10-31",
+    "file": "RootVoiceChanger-0.1.0.apk",
+    "size": 1503096,
+    "sha256": "3e3c99c35967401addcd62b6dba30233d8577e3b528ee4cc482477dfa15589bf",
+    "url": "https://mega.nz/file/5rwy3aSJ#vwjqDVzU12qO5ZBOkQ8psXv9_NQsWAebzribJfu-pc4",
+    "minAndroid": "8.0"
+  }
 }
