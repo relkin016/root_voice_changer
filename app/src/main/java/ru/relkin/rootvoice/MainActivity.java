@@ -6,11 +6,14 @@ import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputFilter;
 import android.view.View;
+import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -23,9 +26,12 @@ import com.google.android.material.color.DynamicColors;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.slider.Slider;
+import com.google.android.material.textfield.TextInputLayout;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -43,13 +49,16 @@ public class MainActivity extends AppCompatActivity {
     private final Runnable push = this::pushParams;
 
     private SharedPreferences prefs;
+    private PresetStore userPresets;
+    /** Пресет, выбранный последним (из одинаковых по параметрам подсвечиваем именно его). */
+    private VoiceParams.Preset selected;
     private boolean rootOk;
     private ModuleInstaller.State state;
     private boolean effectLoaded;
     private boolean busy;
     private boolean updatingUi;
 
-    private TextView status, lblRough, lblPitch, lblRobot, lblEcho, lblGain, previewInfo;
+    private TextView status, lblRough, lblPitch, lblRobot, lblEcho, lblGain, previewInfo, presetsHint;
     private View progress, advanced;
     private MaterialButton btnInstall, btnRemove, btnReboot, btnListen, btnRecord;
     private RecordingsPanel recordings;
@@ -87,6 +96,7 @@ public class MainActivity extends AppCompatActivity {
         swEnabled = findViewById(R.id.swEnabled);
         swRadio = findViewById(R.id.swRadio);
         presets = findViewById(R.id.presets);
+        presetsHint = findViewById(R.id.presetsHint);
         sRough = findViewById(R.id.sRough);
         sPitch = findViewById(R.id.sPitch);
         sRobot = findViewById(R.id.sRobot);
@@ -96,17 +106,13 @@ public class MainActivity extends AppCompatActivity {
 
         prefs = getSharedPreferences("voice", MODE_PRIVATE);
         params.load(prefs);
+        userPresets = new PresetStore(prefs);
 
-        for (int i = 0; i < VoiceParams.PRESETS.length; i++) {
-            Chip chip = (Chip) getLayoutInflater().inflate(R.layout.item_preset, presets, false);
-            chip.setId(View.generateViewId());
-            chip.setTag(i);
-            chip.setText(VoiceParams.PRESETS[i].name);
-            presets.addView(chip);
-        }
+        buildPresetChips();
         presets.setOnCheckedStateChangeListener((group, ids) -> {
             if (updatingUi || ids.isEmpty()) return;
-            params.apply(VoiceParams.PRESETS[(int) group.findViewById(ids.get(0)).getTag()]);
+            selected = (VoiceParams.Preset) group.findViewById(ids.get(0)).getTag();
+            params.apply(selected);
             showParams();
             onParamsChanged();
         });
@@ -193,16 +199,149 @@ public class MainActivity extends AppCompatActivity {
         sRobot.setValue(clampToSlider(sRobot, Math.round(params.robot * 100)));
         sEcho.setValue(clampToSlider(sEcho, Math.round(params.echo * 100)));
         sGain.setValue(clampToSlider(sGain, Math.round(params.gainDb)));
-        int match = params.matchingPreset();
+        updatingUi = false;
+        checkMatchingPreset();
+        updateLabels();
+    }
+
+    /** Подсвечивает пресет, совпадающий с текущими параметрами (предпочитая выбранный последним). */
+    private void checkMatchingPreset() {
+        List<VoiceParams.Preset> all = userPresets.all();
+        if (selected == null || !all.contains(selected) || params.matchingPreset(Collections.singletonList(selected)) == null) {
+            selected = params.matchingPreset(all);
+        }
+        updatingUi = true;
         presets.clearCheck();
-        if (match >= 0) {
-            for (int i = 0; i < presets.getChildCount(); i++) {
-                View c = presets.getChildAt(i);
-                if ((int) c.getTag() == match) presets.check(c.getId());
-            }
+        for (int i = 0; selected != null && i < presets.getChildCount(); i++) {
+            View c = presets.getChildAt(i);
+            if (c.getTag() == selected) presets.check(c.getId());
         }
         updatingUi = false;
-        updateLabels();
+    }
+
+    // ---- пресеты -------------------------------------------------------------------------
+
+    private void buildPresetChips() {
+        updatingUi = true;
+        presets.removeAllViews();
+        for (VoiceParams.Preset p : userPresets.all()) {
+            Chip chip = (Chip) getLayoutInflater().inflate(R.layout.item_preset, presets, false);
+            chip.setId(View.generateViewId());
+            chip.setTag(p);
+            chip.setText(p.name);
+            if (p.custom) {
+                chip.setOnLongClickListener(v -> {
+                    editPreset(p);
+                    return true;
+                });
+            }
+            presets.addView(chip);
+        }
+        Chip add = (Chip) getLayoutInflater().inflate(R.layout.item_preset_add, presets, false);
+        add.setId(View.generateViewId());
+        add.setOnClickListener(v -> askPresetName(R.string.preset_save, userPresets.nextName(), null));
+        presets.addView(add);
+        updatingUi = false;
+        presetsHint.setVisibility(userPresets.list().isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    private void editPreset(VoiceParams.Preset p) {
+        String[] actions = {getString(R.string.preset_overwrite), getString(R.string.preset_rename),
+                getString(R.string.preset_delete)};
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(p.name)
+                .setItems(actions, (d, which) -> {
+                    if (which == 0) {
+                        VoiceParams.Preset np = params.toPreset(p.name);
+                        userPresets.replace(p, np);
+                        selected = np;
+                        onPresetsChanged();
+                    } else if (which == 1) {
+                        askPresetName(R.string.preset_rename, p.name, p);
+                    } else {
+                        new MaterialAlertDialogBuilder(this)
+                                .setTitle(getString(R.string.preset_delete_q, p.name))
+                                .setPositiveButton(R.string.preset_delete, (d2, w) -> {
+                                    userPresets.remove(p);
+                                    onPresetsChanged();
+                                })
+                                .setNegativeButton(android.R.string.cancel, null)
+                                .show();
+                    }
+                })
+                .show();
+    }
+
+    /**
+     * Спрашивает имя пресета. renaming == null — сохранить текущие параметры как новый пресет
+     * (или перезаписать пользовательский с тем же именем), иначе — переименовать renaming.
+     */
+    private void askPresetName(int title, String initial, VoiceParams.Preset renaming) {
+        TextInputLayout box = new TextInputLayout(this);
+        int pad = Math.round(24 * getResources().getDisplayMetrics().density);
+        box.setPadding(pad, pad / 3, pad, 0);
+        box.setHint(R.string.preset_name);
+        box.setCounterEnabled(true);
+        box.setCounterMaxLength(PresetStore.MAX_NAME);
+        EditText input = new EditText(box.getContext());
+        input.setSingleLine(true);
+        input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(PresetStore.MAX_NAME)});
+        input.setText(initial);
+        input.selectAll();
+        box.addView(input);
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setTitle(title)
+                .setView(box)
+                .setPositiveButton(R.string.preset_ok, null)
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        dialog.setOnShowListener(d -> {
+            input.requestFocus();
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String name = input.getText().toString().trim().replaceAll("\\s+", " ");
+                VoiceParams.Preset same = userPresets.find(name);
+                if (name.isEmpty()) {
+                    box.setError(getString(R.string.preset_err_empty));
+                } else if (PresetStore.isBuiltInName(name)) {
+                    box.setError(getString(R.string.preset_err_builtin));
+                } else if (renaming != null && same != null && same != renaming) {
+                    box.setError(getString(R.string.preset_err_exists));
+                } else if (renaming == null && same != null && box.getError() == null) {
+                    // Первое нажатие предупреждает, повторное — перезаписывает.
+                    box.setError(getString(R.string.preset_err_overwrite));
+                } else {
+                    VoiceParams.Preset np;
+                    if (renaming != null) {
+                        np = new VoiceParams.Preset(name, renaming.pitch, renaming.rough, renaming.robot,
+                                renaming.echo, renaming.radio, renaming.gainDb, true);
+                        userPresets.replace(renaming, np);
+                        if (selected == renaming) selected = np;
+                    } else {
+                        np = params.toPreset(name);
+                        userPresets.put(np);
+                        selected = np;
+                    }
+                    dialog.dismiss();
+                    onPresetsChanged();
+                    if (renaming == null) {
+                        Toast.makeText(this, getString(R.string.preset_saved, name), Toast.LENGTH_SHORT).show();
+                    }
+                }
+            });
+        });
+        input.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence c, int a, int b, int n) { }
+            @Override public void onTextChanged(CharSequence c, int a, int b, int n) { box.setError(null); }
+            @Override public void afterTextChanged(android.text.Editable e) { }
+        });
+        dialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
+        dialog.show();
+    }
+
+    private void onPresetsChanged() {
+        buildPresetChips();
+        checkMatchingPreset();
     }
 
     private static float clampToSlider(Slider s, float v) {
@@ -220,14 +359,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void onSliderChanged() {
         // Ручная правка: подсвечиваем пресет, только если параметры с ним совпали.
-        int match = params.matchingPreset();
-        updatingUi = true;
-        presets.clearCheck();
-        for (int i = 0; match >= 0 && i < presets.getChildCount(); i++) {
-            View c = presets.getChildAt(i);
-            if ((int) c.getTag() == match) presets.check(c.getId());
-        }
-        updatingUi = false;
+        checkMatchingPreset();
         updateLabels();
         onParamsChanged();
     }

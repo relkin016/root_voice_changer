@@ -104,6 +104,14 @@
                         app:singleSelection="true" />
                 </HorizontalScrollView>
 
+                <TextView
+                    android:id="@+id/presetsHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/preset_hint"
+                    android:textAppearance="?attr/textAppearanceBodySmall"
+                    android:visibility="gone" />
+
                 <TextView android:id="@+id/lblRough" style="@style/Label" android:layout_marginTop="12dp" />
 
                 <com.google.android.material.slider.Slider

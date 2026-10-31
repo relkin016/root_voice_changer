@@ -1,7 +1,7 @@
 apply plugin: 'com.android.application'
 
 // Версия приложения (0.x.y). versionCode выводится из неё.
-def appVersion = "0.2.0"
+def appVersion = "0.3.0"
 def (vMajor, vMinor, vPatch) = appVersion.tokenize('.').collect { it as int }
 
 // Ключ подписи лежит в keystore/ (вне git).

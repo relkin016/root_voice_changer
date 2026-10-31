@@ -2,6 +2,7 @@ package ru.relkin.rootvoice;
 
 import android.content.SharedPreferences;
 
+import java.util.List;
 import java.util.Locale;
 
 /** Параметры голоса. Сериализуются в строку, которую читает DSP (rvc_parse_params). */
@@ -18,9 +19,17 @@ final class VoiceParams {
         final String name;
         final float pitch, rough, robot, echo, gainDb;
         final boolean radio;
+        /** Пресет создан пользователем (можно переименовать, перезаписать и удалить). */
+        final boolean custom;
 
         Preset(String name, float pitch, float rough, float robot, float echo, boolean radio, float gainDb) {
+            this(name, pitch, rough, robot, echo, radio, gainDb, false);
+        }
+
+        Preset(String name, float pitch, float rough, float robot, float echo, boolean radio, float gainDb,
+               boolean custom) {
             this.name = name;
+            this.custom = custom;
             this.pitch = pitch;
             this.rough = rough;
             this.robot = robot;
@@ -54,14 +63,18 @@ final class VoiceParams {
         gainDb = p.gainDb;
     }
 
-    /** Индекс пресета, с которым совпадают текущие параметры, или -1. */
-    int matchingPreset() {
-        for (int i = 0; i < PRESETS.length; i++) {
-            Preset p = PRESETS[i];
+    /** Пользовательский пресет с текущими параметрами. */
+    Preset toPreset(String name) {
+        return new Preset(name, pitch, rough, robot, echo, radio, gainDb, true);
+    }
+
+    /** Первый пресет из списка, с которым совпадают текущие параметры, или null. */
+    Preset matchingPreset(List<Preset> presets) {
+        for (Preset p : presets) {
             if (near(p.pitch, pitch) && near(p.rough, rough) && near(p.robot, robot) && near(p.echo, echo)
-                    && p.radio == radio && near(p.gainDb, gainDb)) return i;
+                    && p.radio == radio && near(p.gainDb, gainDb)) return p;
         }
-        return -1;
+        return null;
     }
 
     private static boolean near(float a, float b) {
