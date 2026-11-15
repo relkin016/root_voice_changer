@@ -7,6 +7,8 @@
 // нужные структуры повторены ниже с тем же двоичным раскладом.
 
 #include <errno.h>
+#include <math.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -98,9 +100,14 @@ enum {
     EFFECT_CMD_GET_CONFIG = 14,
     EFFECT_CMD_GET_CONFIG_REVERSE = 15,
     EFFECT_CMD_SET_AUDIO_SOURCE = 19,
+    EFFECT_CMD_DUMP = 21,  // Android 10+: cmdData — fd, куда писать отчёт (dumpsys media.audio_flinger)
 };
 
 #define EFFECT_FLAG_TYPE_PRE_PROC 3u
+// RecordThread::checkEffectCompatibility_l() не пускает в «быстрый» поток захвата
+// (AUDIO_INPUT_FLAG_FAST — так пишут Discord, WebRTC и прочая VoIP) эффекты без этого флага.
+// На обработку он не влияет: системные AEC/NS (Qualcomm Fluence) объявляют его так же.
+#define EFFECT_FLAG_HW_ACC_TUNNEL 0x00020000u
 #define EFFECT_CONTROL_API_VERSION 0x00020000u  // 2.0
 #define EFFECT_LIBRARY_API_VERSION 0x00030000u  // 3.0
 #define AUDIO_EFFECT_LIBRARY_TAG (('A' << 24) | ('E' << 16) | ('L' << 8) | 'T')
@@ -143,7 +150,7 @@ static const effect_descriptor_t kDescriptor = {
     .type = { 0x08255bd4, 0x0dc9, 0x4343, 0x933a, { 0x51, 0xce, 0x56, 0xe4, 0x76, 0x1e } },
     .uuid = { 0xf6f24dc9, 0xfd4d, 0x4a3c, 0x845b, { 0x58, 0x1d, 0xdf, 0x06, 0x37, 0xb6 } },
     .apiVersion = EFFECT_CONTROL_API_VERSION,
-    .flags = EFFECT_FLAG_TYPE_PRE_PROC,
+    .flags = EFFECT_FLAG_TYPE_PRE_PROC | EFFECT_FLAG_HW_ACC_TUNNEL,
     .cpuLoad = 10,
     .memoryUsage = 1,
     .name = "Root Voice Changer",
@@ -162,6 +169,11 @@ typedef struct {
     int64_t next_poll_ns;
     uint32_t prop_serial;
     const prop_info *prop;
+    int32_t session, io, source;
+    // Статистика для EFFECT_CMD_DUMP: видно, доходит ли звук до эффекта.
+    uint64_t process_calls, frames_processed;
+    int64_t last_process_ns;
+    float peak_in, peak_out;  // пиковый уровень последнего буфера
     float scratch[CHUNK * 8];
 } rvc_effect_t;
 
@@ -198,9 +210,17 @@ static void poll_params(rvc_effect_t *e) {
     if (e->prop) __system_property_read_callback(e->prop, on_prop, e);
 }
 
+// Обёртка над аудио-HAL (rvc_shim.c) в этом же процессе уже обрабатывает весь звук с микрофона.
+static int shim_active(void) {
+    static int active;
+    if (!active && getenv("RVC_SHIM_ACTIVE")) active = 1;
+    return active;
+}
+
 static int32_t fx_process(effect_handle_t self, audio_buffer_t *in, audio_buffer_t *out) {
     rvc_effect_t *e = (rvc_effect_t *)self;
     if (!e || !in || !out || !in->raw || !out->raw) return -EINVAL;
+    e->process_calls++;
     if (!e->active) return -ENODATA;
     poll_params(e);
 
@@ -209,6 +229,11 @@ static int32_t fx_process(effect_handle_t self, audio_buffer_t *in, audio_buffer
     int accumulate = e->config.outputCfg.accessMode == EFFECT_BUFFER_ACCESS_ACCUMULATE;
     size_t frames = in->frameCount < out->frameCount ? in->frameCount : out->frameCount;
     int chunk = CHUNK * 8 / ch;
+
+    e->frames_processed += frames;
+    e->last_process_ns = now_ns();
+    float pin = 0, pout = 0;
+    int bypass = shim_active();
 
     for (size_t done = 0; done < frames;) {
         int n = (int)(frames - done < (size_t)chunk ? frames - done : (size_t)chunk);
@@ -219,7 +244,9 @@ static int32_t fx_process(effect_handle_t self, audio_buffer_t *in, audio_buffer
         } else {
             for (size_t i = 0; i < cnt; i++) s[i] = in->s16[off + i] * (1.f / 32768.f);
         }
-        rvc_process(e->dsp, s, n);
+        for (size_t i = 0; i < cnt; i++) pin = fmaxf(pin, fabsf(s[i]));
+        if (!bypass) rvc_process(e->dsp, s, n);
+        for (size_t i = 0; i < cnt; i++) pout = fmaxf(pout, fabsf(s[i]));
         if (fmt == AUDIO_FORMAT_PCM_FLOAT) {
             for (size_t i = 0; i < cnt; i++)
                 out->f32[off + i] = accumulate ? out->f32[off + i] + s[i] : s[i];
@@ -231,6 +258,8 @@ static int32_t fx_process(effect_handle_t self, audio_buffer_t *in, audio_buffer
         }
         done += n;
     }
+    e->peak_in = pin;
+    e->peak_out = pout;
     return 0;
 }
 
@@ -247,6 +276,23 @@ static int set_config(rvc_effect_t *e, const effect_config_t *cfg) {
     e->channels = ch;
     rvc_configure(e->dsp, ic->samplingRate ? (int)ic->samplingRate : 48000, ch);
     return 0;
+}
+
+static float to_db(float v) { return v > 1e-9f ? 20.f * log10f(v) : -180.f; }
+
+static void dump(rvc_effect_t *e, int fd) {
+    const rvc_params_t *p = rvc_get_params(e->dsp);
+    int64_t ago = e->last_process_ns ? (now_ns() - e->last_process_ns) / 1000000 : -1;
+    if (shim_active()) dprintf(fd, "\t\tRootVoice: HAL shim active, effect passes audio through\n");
+    dprintf(fd, "\t\tRootVoice: session %d io %d source %d active %d channels %d fmt %d rate %u\n",
+            (int)e->session, (int)e->io, (int)e->source, e->active, e->channels,
+            (int)e->config.inputCfg.format, (unsigned)e->config.inputCfg.samplingRate);
+    dprintf(fd, "\t\tRootVoice: process calls %llu frames %llu last %lld ms ago peak in %.1f dB out %.1f dB\n",
+            (unsigned long long)e->process_calls, (unsigned long long)e->frames_processed, (long long)ago,
+            to_db(e->peak_in), to_db(e->peak_out));
+    dprintf(fd, "\t\tRootVoice: prop %s serial %u params enabled %d pitch %.2f rough %.2f robot %.2f echo %.2f "
+            "radio %d gain %.1f\n", e->prop ? "found" : "NOT FOUND", (unsigned)e->prop_serial, p->enabled,
+            p->pitch, p->rough, p->robot, p->echo, p->radio, p->gain_db);
 }
 
 static int32_t fx_command(effect_handle_t self, uint32_t cmd, uint32_t cmdSize, void *cmdData,
@@ -296,12 +342,19 @@ static int32_t fx_command(effect_handle_t self, uint32_t cmd, uint32_t cmdSize, 
             return 0;
         }
         return -EINVAL;
+    case EFFECT_CMD_DUMP:
+        if (!cmdData || cmdSize < sizeof(uint32_t)) return -EINVAL;
+        dump(e, *(const int *)cmdData);
+        return 0;
+    case EFFECT_CMD_SET_AUDIO_SOURCE:
+        if (cmdData && cmdSize >= sizeof(uint32_t)) e->source = *(const int32_t *)cmdData;
+        if (want_status) *reply = 0;
+        return 0;
     case EFFECT_CMD_SET_PARAM_DEFERRED:
     case EFFECT_CMD_SET_PARAM_COMMIT:
     case EFFECT_CMD_SET_DEVICE:
     case EFFECT_CMD_SET_INPUT_DEVICE:
     case EFFECT_CMD_SET_AUDIO_MODE:
-    case EFFECT_CMD_SET_AUDIO_SOURCE:
     case EFFECT_CMD_SET_VOLUME:
         if (want_status) *reply = 0;
         return 0;
@@ -326,7 +379,6 @@ static const struct effect_interface_s kInterface = {
 };
 
 static int32_t lib_create(const effect_uuid_t *uuid, int32_t sessionId, int32_t ioId, effect_handle_t *pHandle) {
-    (void)sessionId; (void)ioId;
     if (!uuid || !pHandle || !uuid_eq(uuid, &kDescriptor.uuid)) return -EINVAL;
     rvc_effect_t *e = calloc(1, sizeof(*e));
     if (!e) return -ENOMEM;
@@ -336,6 +388,9 @@ static int32_t lib_create(const effect_uuid_t *uuid, int32_t sessionId, int32_t 
         return -ENOMEM;
     }
     e->itf = &kInterface;
+    e->session = sessionId;
+    e->io = ioId;
+    e->source = -1;
     e->channels = 1;
     e->config.inputCfg.samplingRate = e->config.outputCfg.samplingRate = 48000;
     e->config.inputCfg.channels = 0x10;   // AUDIO_CHANNEL_IN_MONO

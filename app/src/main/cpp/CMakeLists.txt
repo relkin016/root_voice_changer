@@ -10,6 +10,11 @@ add_link_options(-Wl,-z,max-page-size=16384 -Wl,--gc-sections -Wl,--hash-style=b
 add_library(rootvoice SHARED rvc_effect.c rvc_dsp.c)
 target_link_libraries(rootvoice m)
 
+# Обёртка над аудио-HAL: модуль кладёт её вместо audio.primary.<платформа>.so, оригинал — рядом
+# как *.rvcorig.so. Нужна там, где драйвер не вызывает эффекты записи (Qualcomm CAF и др.).
+add_library(rvcshim SHARED rvc_shim.c rvc_dsp.c)
+target_link_libraries(rvcshim m dl log)
+
 # JNI для прослушки в приложении.
 add_library(rvcjni SHARED rvc_jni.c rvc_dsp.c)
 target_link_libraries(rvcjni m)

@@ -55,6 +55,8 @@ public class MainActivity extends AppCompatActivity {
     private boolean rootOk;
     private ModuleInstaller.State state;
     private boolean effectLoaded;
+    /** Обёртка драйвера загружена (проверяется от root в refreshStatus). */
+    private volatile boolean shimLoaded;
     private boolean busy;
     private boolean updatingUi;
 
@@ -394,6 +396,7 @@ public class MainActivity extends AppCompatActivity {
             rootOk = RootShell.available();
             if (!rootOk) return null;
             ModuleInstaller.applyParams(p);
+            shimLoaded = ModuleInstaller.shimLoaded();
             return ModuleInstaller.state();
         }, s -> {
             state = s;
@@ -481,13 +484,21 @@ public class MainActivity extends AppCompatActivity {
                 case NOT_INSTALLED: sb.append("✗ Модуль не установлен"); break;
                 case PENDING_INSTALL: sb.append("⟳ Модуль установлен — перезагрузите телефон"); break;
                 case INSTALLED: sb.append("✓ Модуль установлен"); break;
+                case STALE: sb.append("⚠ Прошивка обновилась после установки модуля — он отключён, "
+                        + "чтобы не подкладывать файлы от старой прошивки. Нажмите «Переустановить» и перезагрузитесь"); break;
                 case DISABLED: sb.append("✗ Модуль отключён в root-менеджере"); break;
                 case PENDING_REMOVE: sb.append("⟳ Модуль будет удалён после перезагрузки"); break;
             }
             sb.append('\n');
         }
-        if (effectLoaded) {
-            sb.append("✓ Эффект работает в аудиосистеме — голос меняется во всех приложениях");
+        if (shimLoaded) {
+            sb.append("✓ Обёртка аудиодрайвера работает — голос меняется во всех приложениях");
+        } else if (effectLoaded) {
+            sb.append("✓ Эффект загружен в аудиосистему");
+            if (state == ModuleInstaller.State.INSTALLED) {
+                sb.append("\nОбёртка аудиодрайвера не загружена: на части устройств (например, Qualcomm) "
+                        + "драйвер не пропускает звук через эффект. Переустановите модуль и перезагрузитесь.");
+            }
         } else {
             sb.append("✗ Эффект не загружен аудиосистемой");
             if (state == ModuleInstaller.State.INSTALLED) {
@@ -559,7 +570,7 @@ public class MainActivity extends AppCompatActivity {
     private void ensureEngine() {
         if (engine.isRunning()) return;
         effectLoaded = ModuleInstaller.effectLoaded();
-        boolean inApp = !effectLoaded;
+        boolean inApp = !effectLoaded && !shimLoaded;
         previewInfo.setText(inApp
                 ? "Модуль не активен: звук обрабатывается внутри приложения. Другие приложения пока слышат обычный голос."
                 : "Звук обрабатывает системный модуль — так же вас слышат другие приложения.");

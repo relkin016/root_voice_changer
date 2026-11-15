@@ -35,7 +35,36 @@ final class ModuleInstaller {
             + "/vendor/etc/audio/audio_effects.xml /vendor/etc/audio/sku_*/audio_effects.xml "
             + "/system/etc/audio_effects.xml";
 
-    enum State { NOT_INSTALLED, PENDING_INSTALL, INSTALLED, DISABLED, PENDING_REMOVE }
+    /** Обёртка драйвера (librvcshim.so): метка внутри и суффикс копии оригинала рядом с ней. */
+    static final String SHIM_LIB = "librvcshim.so";
+    static final String SHIM_MARKER = "RVC_SHIM_MARKER_v1";
+    static final String ORIG_SUFFIX = ".rvcorig.so";
+
+    /** Файл в модуле с отпечатком прошивки, для которой он собран (сверяет post-fs-data.sh). */
+    static final String FINGERPRINT_FILE = "fingerprint.txt";
+    private static final String FINGERPRINT_CMD =
+            "echo \"$(getprop ro.build.fingerprint)|$(getprop ro.vendor.build.fingerprint)\"";
+
+    /**
+     * Скрипт печатает файл $f без подмен модулями (в т. ч. старой версией нашего): в отдельном
+     * пространстве имён монтирования снимает монтирования над файлом, пока в нём есть метка $mark.
+     * Нужен после обновления прошивки — иначе в новый модуль попали бы файлы от старой.
+     */
+    private static final String CLEAN_CAT = "bb=\n"
+            + "for b in /data/adb/magisk/busybox /data/adb/ksu/bin/busybox /data/adb/ap/bin/busybox; do\n"
+            + "  [ -x $b ] && { bb=$b; break; }; done\n"
+            + "if [ -n \"$bb\" ]; then u=\"$bb unshare -m\"; else u=\"unshare -m\"; fi\n"
+            + "f=\"$f\" mark=\"$mark\" bb=\"$bb\" $u sh -c '\n"
+            + "  $bb mount --make-rprivate / || exit 1\n"
+            + "  ok() { [ -s \"$f\" ] && ! grep -q \"$mark\" \"$f\"; }\n"
+            + "  p=$f\n"
+            + "  while ! ok; do\n"
+            + "    $bb umount -l \"$p\" 2>/dev/null && continue\n"
+            + "    p=${p%/*}; [ -n \"$p\" ] || exit 1\n"
+            + "  done\n"
+            + "  cat \"$f\"' 2>/dev/null\n";
+
+    enum State { NOT_INSTALLED, PENDING_INSTALL, INSTALLED, STALE, DISABLED, PENDING_REMOVE }
 
     private ModuleInstaller() {
     }
@@ -51,11 +80,19 @@ final class ModuleInstaller {
         return false;
     }
 
+    /** Загружена ли обёртка драйвера каким-нибудь процессом (виден её спутник *.rvcorig.so). */
+    static boolean shimLoaded() throws IOException {
+        return RootShell.run("grep -l '" + ORIG_SUFFIX.replace(".", "\\.") + "' /proc/[0-9]*/maps 2>/dev/null | head -1")
+                .out.trim().startsWith("/proc/");
+    }
+
     static State state() throws IOException {
         String out = RootShell.run("m=" + MODULE_DIR + "\n"
                 + "if [ -f $m/remove ]; then echo remove\n"
                 + "elif [ -d /data/adb/modules_update/" + MODULE_ID + " ] || [ -f $m/update ]; then echo update\n"
                 + "elif [ -f $m/disable ]; then echo disable\n"
+                + "elif [ -f $m/module.prop ] && [ \"$(cat $m/" + FINGERPRINT_FILE + " 2>/dev/null)\" != \"$("
+                + FINGERPRINT_CMD + ")\" ]; then echo stale\n"
                 + "elif [ -f $m/module.prop ]; then echo installed\n"
                 + "else echo none; fi").out.trim();
         switch (out) {
@@ -63,6 +100,7 @@ final class ModuleInstaller {
             case "update": return State.PENDING_INSTALL;
             case "disable": return State.DISABLED;
             case "installed": return State.INSTALLED;
+            case "stale": return State.STALE;
             default: return State.NOT_INSTALLED;
         }
     }
@@ -92,7 +130,12 @@ final class ModuleInstaller {
         try (ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(zipFile));
              ZipFile apk = new ZipFile(ctx.getApplicationInfo().sourceDir)) {
             for (String path : configs) {
-                RootShell.Result r = RootShell.run("cat " + RootShell.quote(path));
+                RootShell.Result r = RootShell.run("f=" + RootShell.quote(path) + " mark=" + EffectsXmlPatcher.LIB_FILE
+                        + "\n" + CLEAN_CAT);
+                if (!r.ok() || EffectsXmlPatcher.isPatched(r.out)) {
+                    // Нет unshare: берём как есть (если файл уже подменён нашим модулем — он от этой же прошивки).
+                    r = RootShell.run("cat " + RootShell.quote(path));
+                }
                 if (!r.ok()) throw new IOException("Не удалось прочитать " + path + ": " + r.out);
                 String patched = EffectsXmlPatcher.patch(r.out, EFFECT_UUID.toString());
                 String rel = moduleRelPath(path);
@@ -101,6 +144,8 @@ final class ModuleInstaller {
                 log.append("Конфигурация: ").append(path).append('\n');
             }
 
+            addHalShim(ctx, zip, apk, targets, log);
+
             List<String> abis = Arrays.asList(Build.SUPPORTED_ABIS);
             int libs = 0;
             if (abis.contains("arm64-v8a")) libs += putLib(zip, apk, "arm64-v8a", "lib64");
@@ -108,6 +153,7 @@ final class ModuleInstaller {
             if (libs == 0) throw new IOException("В APK нет библиотеки эффекта для " + abis);
 
             put(zip, "targets.txt", targets.toString());
+            put(zip, FINGERPRINT_FILE, RootShell.run(FINGERPRINT_CMD).out.trim() + "\n");
             put(zip, "module.prop", "id=" + MODULE_ID + "\nname=Root Voice Changer\nversion=v"
                     + BuildConfigCompat.versionName(ctx) + "\nversionCode=" + BuildConfigCompat.versionCode(ctx)
                     + "\nauthor=relkin\ndescription=Изменение голоса с микрофона для всех приложений. "
@@ -141,6 +187,91 @@ final class ModuleInstaller {
         }
         log.append("\nКопия модуля: ").append(PUBLIC_ZIP);
         return log.toString();
+    }
+
+    /**
+     * Находит загруженный аудио-HAL (audio.primary.*.so в картах памяти процессов) и кладёт в модуль
+     * обёртку под его именем, а сам драйвер — рядом как *.rvcorig.so. Если обёртка уже стоит
+     * (переустановка), оригинал берётся из её спутника. Без найденного HAL модуль ставится без обёртки.
+     */
+    private static void addHalShim(Context ctx, ZipOutputStream zip, ZipFile apk, StringBuilder targets,
+                                   StringBuilder log) throws IOException {
+        List<String> hals = new ArrayList<>();
+        for (String line : RootShell.run("grep -ho '/[^ ]*/hw/audio\\.primary\\.[^ /]*\\.so$' /proc/[0-9]*/maps "
+                + "2>/dev/null | sort -u; true").out.split("\n")) {
+            String path = line.trim();
+            if ((path.startsWith("/vendor/") || path.startsWith("/system/")) && !path.endsWith(ORIG_SUFFIX)
+                    && !hals.contains(path)) hals.add(path);
+        }
+        if (hals.isEmpty()) {
+            log.append("Обёртка драйвера: загруженный audio.primary.*.so не найден — ставлю только эффект\n");
+            return;
+        }
+        for (String hal : hals) {
+            String abi = hal.contains("/lib64/") ? "arm64-v8a" : "armeabi-v7a";
+            ZipEntry e = apk.getEntry("lib/" + abi + "/" + SHIM_LIB);
+            if (e == null) {
+                log.append("Обёртка драйвера: нет ").append(SHIM_LIB).append(" для ").append(abi).append('\n');
+                continue;
+            }
+            String base = hal.substring(0, hal.length() - 3);
+            String origCopy = base + ORIG_SUFFIX;
+            // Сначала настоящий драйвер прошивки из-под монтирований модуля; если не вышло и на месте
+            // драйвера наша обёртка — копия оригинала рядом с ней (верна, пока прошивка не обновлялась).
+            byte[] orig = readAsRoot(ctx, "f=" + RootShell.quote(hal) + " mark=" + SHIM_MARKER + "\n" + CLEAN_CAT);
+            if (!isElf(orig) && RootShell.run("grep -q " + SHIM_MARKER + " " + RootShell.quote(hal)).ok()) {
+                orig = readAsRoot(ctx, "cat " + RootShell.quote(origCopy));
+            } else if (!isElf(orig)) {
+                orig = readAsRoot(ctx, "cat " + RootShell.quote(hal));
+            }
+            if (!isElf(orig) || indexOf(orig, SHIM_MARKER.getBytes(StandardCharsets.US_ASCII)) >= 0) {
+                log.append("Обёртка драйвера: не удалось получить оригинал ").append(hal).append(" — пропускаю\n");
+                continue;
+            }
+            byte[] shim;
+            try (InputStream is = apk.getInputStream(e)) {
+                shim = readAll(is);
+            }
+            String rel = moduleRelPath(hal);
+            String origRel = rel.substring(0, rel.length() - 3) + ORIG_SUFFIX;
+            put(zip, rel, shim);
+            put(zip, origRel, orig);
+            // Контекст SELinux обоих файлов post-fs-data.sh копирует с оригинального драйвера.
+            targets.append(rel).append('|').append(hal).append('\n');
+            targets.append(origRel).append('|').append(hal).append('\n');
+            log.append("Обёртка драйвера: ").append(hal).append('\n');
+        }
+    }
+
+    private static boolean isElf(byte[] b) {
+        return b != null && b.length >= 4 && b[0] == 0x7f && b[1] == 'E' && b[2] == 'L' && b[3] == 'F';
+    }
+
+    /**
+     * Выполняет скрипт от root и возвращает его stdout как байты — через пустой файл приложения
+     * (так у копии остаётся контекст приложения). null, если скрипт завершился с ошибкой.
+     */
+    private static byte[] readAsRoot(Context ctx, String script) throws IOException {
+        File tmp = new File(ctx.getCacheDir(), "hal-orig.bin");
+        try {
+            new FileOutputStream(tmp).close();
+            RootShell.Result r = RootShell.run("{\n" + script + "\n} > " + RootShell.quote(tmp.getAbsolutePath()));
+            if (!r.ok()) return null;
+            try (InputStream is = new java.io.FileInputStream(tmp)) {
+                return readAll(is);
+            }
+        } finally {
+            tmp.delete();
+        }
+    }
+
+    static int indexOf(byte[] data, byte[] needle) {
+        outer:
+        for (int i = 0; i + needle.length <= data.length; i++) {
+            for (int j = 0; j < needle.length; j++) if (data[i + j] != needle[j]) continue outer;
+            return i;
+        }
+        return -1;
     }
 
     static void remove() throws IOException {
